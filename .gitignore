@@ -1,0 +1,9 @@
+.DS_Store
+*.tmp
+*.log
+
+# Local credentials and generated session files.
+.env
+.env.*
+session.json
+*.session.json
