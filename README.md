@@ -30,6 +30,39 @@ From GitHub:
 go install github.com/xxxoooxoxo/gogodaddy/cmd/gogodaddy@latest
 ```
 
+## Agent Install Prompt
+
+Copy this prompt into an AI agent when you want it to install and use
+`gogodaddy` safely:
+
+```text
+Install the public Go CLI `gogodaddy`, an unofficial GoDaddy CLI for agents.
+
+Repo: https://github.com/xxxoooxoxo/gogodaddy
+
+Steps:
+1. Verify Go is installed with `go version`.
+2. Install the CLI:
+   `go install github.com/xxxoooxoxo/gogodaddy/cmd/gogodaddy@latest`
+3. Ensure the Go bin directory is on PATH. Check:
+   `which gogodaddy`
+   If missing, add `$(go env GOPATH)/bin` to PATH.
+4. Run:
+   `gogodaddy --help`
+
+Auth:
+- Do not print secrets.
+- Use:
+  `gogodaddy auth login --api-key "$GODADDY_API_KEY" --api-secret "$GODADDY_API_SECRET"`
+
+DNS safety:
+- Use dry runs first.
+- Only mutate DNS with explicit `--apply`.
+- Add records with:
+  `gogodaddy records add --domain example.com --type A --name www --data 192.0.2.1 --ttl 600 --apply`
+- Do not attempt broad deletes. `gogodaddy` only supports guarded one-record delete flows.
+```
+
 ## Auth
 
 Save a global session:
