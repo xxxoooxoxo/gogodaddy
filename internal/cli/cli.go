@@ -17,6 +17,11 @@ import (
 	"github.com/xxxoooxoxo/gogodaddy/internal/godaddy"
 )
 
+// delegateAccessURL is GoDaddy's web page for granting or accepting delegate
+// access to an account. API calls then act on a delegated account by passing
+// that account's shopper id via --shopper-id (the X-Shopper-Id header).
+const delegateAccessURL = "https://account.godaddy.com/access"
+
 type globalOptions struct {
 	configPath string
 	json       bool
@@ -117,6 +122,8 @@ func runAuth(opts globalOptions, args []string, stdout, stderr io.Writer) int {
 		return runAuthLogin(opts, args[1:], stdout, stderr)
 	case "status":
 		return runAuthStatus(opts, args[1:], stdout, stderr)
+	case "delegate":
+		return runAuthDelegate(opts, args[1:], stdout, stderr)
 	case "logout":
 		return runAuthLogout(opts, args[1:], stdout, stderr)
 	default:
@@ -138,13 +145,11 @@ func runAuthLogin(opts globalOptions, args []string, stdout, stderr io.Writer) i
 		return 2
 	}
 	if *apiKey == "" || *apiSecret == "" {
-		fmt.Fprintln(stderr, "missing --api-key or --api-secret; flags can also come from GODADDY_API_KEY and GODADDY_API_SECRET")
-		return 2
+		return writeError(stderr, opts.json, "missing_flag", "missing --api-key or --api-secret; flags can also come from GODADDY_API_KEY and GODADDY_API_SECRET", 2)
 	}
 	resolvedBaseURL, err := config.ResolveBaseURL(*environment, *baseURL)
 	if err != nil {
-		fmt.Fprintln(stderr, err)
-		return 2
+		return writeError(stderr, opts.json, "invalid_environment", err.Error(), 2)
 	}
 
 	session := config.Session{
@@ -155,8 +160,7 @@ func runAuthLogin(opts globalOptions, args []string, stdout, stderr io.Writer) i
 		ShopperID:   *shopperID,
 	}
 	if err := config.Save(opts.configPath, session); err != nil {
-		fmt.Fprintln(stderr, err)
-		return 1
+		return writeError(stderr, opts.json, "runtime_error", err.Error(), 1)
 	}
 
 	return writeOutput(stdout, opts.json, map[string]any{
@@ -184,8 +188,7 @@ func runAuthStatus(opts globalOptions, args []string, stdout, stderr io.Writer) 
 				"path":          opts.configPath,
 			}, "No saved GoDaddy session. Run `gogodaddy auth login --api-key ... --api-secret ...`.\n")
 		}
-		fmt.Fprintln(stderr, err)
-		return 1
+		return writeError(stderr, opts.json, "runtime_error", err.Error(), 1)
 	}
 
 	return writeOutput(stdout, opts.json, map[string]any{
@@ -206,13 +209,53 @@ func runAuthLogout(opts globalOptions, args []string, stdout, stderr io.Writer) 
 		return 2
 	}
 	if err := config.Delete(opts.configPath); err != nil {
-		fmt.Fprintln(stderr, err)
-		return 1
+		return writeError(stderr, opts.json, "runtime_error", err.Error(), 1)
 	}
 	return writeOutput(stdout, opts.json, map[string]any{
 		"status": "deleted",
 		"path":   opts.configPath,
 	}, fmt.Sprintf("Deleted GoDaddy session at %s.\n", opts.configPath))
+}
+
+func runAuthDelegate(opts globalOptions, args []string, stdout, stderr io.Writer) int {
+	fs := flag.NewFlagSet("gogodaddy auth delegate", flag.ContinueOnError)
+	fs.SetOutput(stderr)
+	if err := fs.Parse(args); err != nil {
+		return 2
+	}
+
+	// Surface whichever shopper id a real call would use, if any: the global
+	// --shopper-id flag wins, otherwise fall back to the saved session or env.
+	shopperID := opts.shopperID
+	source := "flag"
+	if shopperID == "" {
+		source = ""
+		if session, src, err := loadSessionOrEnv(opts); err == nil {
+			shopperID = session.ShopperID
+			if shopperID != "" {
+				source = src
+			}
+		}
+	}
+
+	var text strings.Builder
+	fmt.Fprintf(&text, "Delegate Access\n")
+	fmt.Fprintf(&text, "Grant access to your account, or accept access to someone else's, here:\n  %s\n\n", delegateAccessURL)
+	fmt.Fprintf(&text, "Once access is granted, act on the delegated account by passing its shopper id:\n")
+	fmt.Fprintf(&text, "  gogodaddy --shopper-id OWNER_SHOPPER_ID records list --domain example.com\n")
+	fmt.Fprintf(&text, "  gogodaddy auth login --shopper-id OWNER_SHOPPER_ID --api-key KEY --api-secret SECRET\n\n")
+	if shopperID != "" {
+		fmt.Fprintf(&text, "Current X-Shopper-Id: %s (from %s)\n", shopperID, source)
+	} else {
+		fmt.Fprintf(&text, "Current X-Shopper-Id: not set (calls act as the API key's own account)\n")
+	}
+
+	return writeOutput(stdout, opts.json, map[string]any{
+		"delegate_access_url": delegateAccessURL,
+		"shopper_id":          shopperID,
+		"shopper_id_source":   source,
+		"next_step":           "grant or accept delegate access at the URL, then pass --shopper-id OWNER_SHOPPER_ID",
+	}, text.String())
 }
 
 func runRecords(opts globalOptions, args []string, stdout, stderr io.Writer) int {
@@ -266,35 +309,33 @@ func runRecordsAdd(opts globalOptions, args []string, stdout, stderr io.Writer) 
 		Service:  *service,
 	}
 	if *domain == "" {
-		fmt.Fprintln(stderr, "--domain is required")
-		return 2
+		return writeError(stderr, opts.json, "missing_flag", "--domain is required", 2)
 	}
 	if err := godaddy.ValidateRecord(record, true); err != nil {
-		fmt.Fprintln(stderr, err)
-		return 2
+		return writeError(stderr, opts.json, "invalid_record", err.Error(), 2)
 	}
 
 	if !*apply {
+		nextCommand := buildAddCommand(*domain, record)
 		return writeOutput(stdout, opts.json, map[string]any{
-			"dry_run": true,
-			"action":  "add",
-			"method":  "PATCH",
-			"path":    "/v1/domains/" + *domain + "/records",
-			"records": []godaddy.DNSRecord{record},
-			"apply":   "rerun with --apply to add this record",
-		}, "Dry run only. Rerun with --apply to add the DNS record.\n")
+			"dry_run":      true,
+			"action":       "add",
+			"method":       "PATCH",
+			"path":         "/v1/domains/" + *domain + "/records",
+			"records":      []godaddy.DNSRecord{record},
+			"next_command": nextCommand,
+		}, "Dry run only. Run this to apply:\n  "+nextCommand+"\n")
 	}
 
 	client, err := clientFromSession(opts)
 	if err != nil {
-		fmt.Fprintln(stderr, err)
-		return 1
+		code, msg := clientErrorCodeMessage(err)
+		return writeError(stderr, opts.json, code, msg, 1)
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), opts.timeout)
 	defer cancel()
 	if err := client.AddRecords(ctx, *domain, []godaddy.DNSRecord{record}); err != nil {
-		fmt.Fprintln(stderr, err)
-		return 1
+		return writeError(stderr, opts.json, "api_error", err.Error(), 1)
 	}
 
 	return writeOutput(stdout, opts.json, map[string]any{
@@ -316,29 +357,37 @@ func runRecordsList(opts globalOptions, args []string, stdout, stderr io.Writer)
 		return 2
 	}
 	if *domain == "" {
-		fmt.Fprintln(stderr, "--domain is required")
-		return 2
+		return writeError(stderr, opts.json, "missing_flag", "--domain is required", 2)
 	}
 	if err := godaddy.ValidateTypeName(strings.ToUpper(*recordType), *name); err != nil {
-		fmt.Fprintln(stderr, err)
-		return 2
+		return writeError(stderr, opts.json, "invalid_record", err.Error(), 2)
 	}
 
 	client, err := clientFromSession(opts)
 	if err != nil {
-		fmt.Fprintln(stderr, err)
-		return 1
+		code, msg := clientErrorCodeMessage(err)
+		return writeError(stderr, opts.json, code, msg, 1)
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), opts.timeout)
 	defer cancel()
 	records, err := client.GetRecords(ctx, *domain, strings.ToUpper(*recordType), *name, *offset, *limit)
 	if err != nil {
-		fmt.Fprintln(stderr, err)
-		return 1
+		return writeError(stderr, opts.json, "api_error", err.Error(), 1)
 	}
 
 	if opts.json {
-		return writeJSON(stdout, records)
+		if records == nil {
+			records = []godaddy.DNSRecord{}
+		}
+		return writeJSON(stdout, map[string]any{
+			"domain":  *domain,
+			"type":    strings.ToUpper(*recordType),
+			"name":    *name,
+			"count":   len(records),
+			"offset":  *offset,
+			"limit":   *limit,
+			"records": records,
+		})
 	}
 	printRecords(stdout, records)
 	return 0
@@ -364,12 +413,10 @@ func runRecordsDelete(opts globalOptions, args []string, stdout, stderr io.Write
 	}
 	upperType := strings.ToUpper(*recordType)
 	if *domain == "" {
-		fmt.Fprintln(stderr, "--domain is required")
-		return 2
+		return writeError(stderr, opts.json, "missing_flag", "--domain is required", 2)
 	}
 	if err := godaddy.ValidateTypeName(upperType, *name); err != nil {
-		fmt.Fprintln(stderr, err)
-		return 2
+		return writeError(stderr, opts.json, "invalid_record", err.Error(), 2)
 	}
 
 	selector := godaddy.DeleteSelector{
@@ -382,30 +429,28 @@ func runRecordsDelete(opts globalOptions, args []string, stdout, stderr io.Write
 		Service:  optionalString(*service),
 	}
 	if selector.Data == "" {
-		fmt.Fprintln(stderr, "delete requires --data so one record can be selected")
-		return 2
+		return writeError(stderr, opts.json, "missing_flag", "delete requires --data so one record can be selected", 2)
 	}
 
 	client, err := clientFromSession(opts)
 	if err != nil {
-		fmt.Fprintln(stderr, err)
-		return 1
+		code, msg := clientErrorCodeMessage(err)
+		return writeError(stderr, opts.json, code, msg, 1)
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), opts.timeout)
 	defer cancel()
 
 	existing, err := client.GetRecords(ctx, *domain, upperType, *name, 0, 0)
 	if err != nil {
-		fmt.Fprintln(stderr, err)
-		return 1
+		return writeError(stderr, opts.json, "api_error", err.Error(), 1)
 	}
 	plan, err := godaddy.PlanDeleteOne(existing, selector)
 	if err != nil {
-		fmt.Fprintln(stderr, err)
-		return 1
+		return writeError(stderr, opts.json, "no_single_match", err.Error(), 1)
 	}
 
 	if !*apply {
+		nextCommand := buildDeleteCommand(*domain, upperType, *name, selector)
 		return writeOutput(stdout, opts.json, map[string]any{
 			"dry_run":           true,
 			"action":            "delete_one",
@@ -415,19 +460,17 @@ func runRecordsDelete(opts globalOptions, args []string, stdout, stderr io.Write
 			"record":            plan.Record,
 			"use_direct_delete": plan.UseDirectDelete,
 			"remaining_count":   len(plan.Remaining),
-			"apply":             "rerun with --apply to delete exactly this record",
-		}, "Dry run only. Rerun with --apply to delete exactly one matched DNS record.\n")
+			"next_command":      nextCommand,
+		}, "Dry run only. Run this to apply:\n  "+nextCommand+"\n")
 	}
 
 	if plan.UseDirectDelete {
 		if err := client.DeleteRecordsByTypeName(ctx, *domain, upperType, *name); err != nil {
-			fmt.Fprintln(stderr, err)
-			return 1
+			return writeError(stderr, opts.json, "api_error", err.Error(), 1)
 		}
 	} else {
 		if err := client.ReplaceRecordsByTypeName(ctx, *domain, upperType, *name, plan.Remaining); err != nil {
-			fmt.Fprintln(stderr, err)
-			return 1
+			return writeError(stderr, opts.json, "api_error", err.Error(), 1)
 		}
 	}
 
@@ -501,6 +544,100 @@ func writeJSON(stdout io.Writer, payload any) int {
 	return 0
 }
 
+// writeError reports a failure to stderr and returns exitCode so callers can
+// `return writeError(...)`. Under --json it emits a structured object with a
+// stable error code so an agent can branch without string-matching; otherwise
+// it prints the human-readable message.
+func writeError(stderr io.Writer, asJSON bool, code, message string, exitCode int) int {
+	if asJSON {
+		encoder := json.NewEncoder(stderr)
+		encoder.SetIndent("", "  ")
+		_ = encoder.Encode(map[string]any{
+			"error":     code,
+			"message":   message,
+			"exit_code": exitCode,
+		})
+		return exitCode
+	}
+	fmt.Fprintln(stderr, message)
+	return exitCode
+}
+
+// clientErrorCodeMessage maps a session/credential load failure to a stable
+// error code and an actionable message.
+func clientErrorCodeMessage(err error) (string, string) {
+	if errors.Is(err, config.ErrNoSession) {
+		return "missing_credentials", "no GoDaddy credentials; run `gogodaddy auth login` or set GODADDY_API_KEY and GODADDY_API_SECRET"
+	}
+	return "runtime_error", err.Error()
+}
+
+// buildAddCommand reconstructs a verbatim, replayable `records add ... --apply`
+// command from the parsed record so an agent can copy it to execute the dry run.
+func buildAddCommand(domain string, r godaddy.DNSRecord) string {
+	parts := []string{"gogodaddy records add", "--domain", shellQuote(domain), "--type", r.Type, "--name", shellQuote(r.Name), "--data", shellQuote(r.Data)}
+	if r.TTL != nil {
+		parts = append(parts, "--ttl", fmt.Sprint(*r.TTL))
+	}
+	if r.Priority != nil {
+		parts = append(parts, "--priority", fmt.Sprint(*r.Priority))
+	}
+	if r.Port != nil {
+		parts = append(parts, "--port", fmt.Sprint(*r.Port))
+	}
+	if r.Weight != nil {
+		parts = append(parts, "--weight", fmt.Sprint(*r.Weight))
+	}
+	if r.Protocol != "" {
+		parts = append(parts, "--protocol", shellQuote(r.Protocol))
+	}
+	if r.Service != "" {
+		parts = append(parts, "--service", shellQuote(r.Service))
+	}
+	return strings.Join(append(parts, "--apply"), " ")
+}
+
+// buildDeleteCommand reconstructs a verbatim, replayable `records delete ... --apply`
+// command from the parsed selector.
+func buildDeleteCommand(domain, recordType, name string, sel godaddy.DeleteSelector) string {
+	parts := []string{"gogodaddy records delete", "--domain", shellQuote(domain), "--type", recordType, "--name", shellQuote(name), "--data", shellQuote(sel.Data)}
+	if sel.TTL != nil {
+		parts = append(parts, "--ttl", fmt.Sprint(*sel.TTL))
+	}
+	if sel.Priority != nil {
+		parts = append(parts, "--priority", fmt.Sprint(*sel.Priority))
+	}
+	if sel.Port != nil {
+		parts = append(parts, "--port", fmt.Sprint(*sel.Port))
+	}
+	if sel.Weight != nil {
+		parts = append(parts, "--weight", fmt.Sprint(*sel.Weight))
+	}
+	if sel.Protocol != nil {
+		parts = append(parts, "--protocol", shellQuote(*sel.Protocol))
+	}
+	if sel.Service != nil {
+		parts = append(parts, "--service", shellQuote(*sel.Service))
+	}
+	return strings.Join(append(parts, "--apply"), " ")
+}
+
+// shellQuote single-quotes a value only when it contains characters outside a
+// shell-safe set, so reconstructed commands are safe to paste.
+func shellQuote(s string) string {
+	if s == "" {
+		return "''"
+	}
+	for _, r := range s {
+		safe := (r >= 'a' && r <= 'z') || (r >= 'A' && r <= 'Z') || (r >= '0' && r <= '9') ||
+			r == '.' || r == '_' || r == '-' || r == '@' || r == '/' || r == ':'
+		if !safe {
+			return "'" + strings.ReplaceAll(s, "'", `'\''`) + "'"
+		}
+	}
+	return s
+}
+
 func printRecords(stdout io.Writer, records []godaddy.DNSRecord) {
 	if len(records) == 0 {
 		fmt.Fprintln(stdout, "No records found.")
@@ -561,8 +698,18 @@ Global flags:
   --timeout DURATION  HTTP timeout, default 30s
 
 Commands:
-  auth       Manage the saved GoDaddy API session
+  auth       Manage the saved GoDaddy API session and delegate access
   records    Add, list, and safely delete DNS records
+
+Output:
+  --json works on every command: data on stdout, diagnostics on stderr.
+
+Exit codes:
+  0  success
+  1  runtime or API error (inspect stderr; a retry may help)
+  2  usage error (fix flags, then retry)
+
+See AGENTS.md for the full agent guide (auth, safety model, JSON shapes).
 `)
 }
 
@@ -570,7 +717,12 @@ func printAuthUsage(w io.Writer) {
 	fmt.Fprint(w, `Usage:
   gogodaddy auth login --api-key KEY --api-secret SECRET [--env production|ote]
   gogodaddy auth status
+  gogodaddy auth delegate
   gogodaddy auth logout
+
+Delegate access:
+  auth delegate prints the GoDaddy delegate-access page and shows how to act on a
+  delegated account with --shopper-id OWNER_SHOPPER_ID (the X-Shopper-Id header).
 `)
 }
 
@@ -580,7 +732,15 @@ func printRecordsUsage(w io.Writer) {
   gogodaddy records list --domain DOMAIN --type TYPE --name NAME
   gogodaddy records delete --domain DOMAIN --type TYPE --name NAME --data VALUE [selectors] --apply
 
+Examples:
+  gogodaddy --json records list --domain example.com --type A --name www
+  gogodaddy records add --domain example.com --type A --name www --data 192.0.2.10 --ttl 600          # dry run
+  gogodaddy records add --domain example.com --type A --name www --data 192.0.2.10 --ttl 600 --apply  # execute
+  gogodaddy records delete --domain example.com --type TXT --name _acme-challenge --data token         # dry run
+
 Safeguards:
+  add and delete are a safe dry run without --apply; no network mutation occurs.
+  --json is a global flag (place it before the subcommand) and works on every command.
   add uses GoDaddy's additive PATCH endpoint.
   delete has no broad delete-all mode. It fetches one type/name set, requires --data,
   refuses ambiguous matches, and mutates only after --apply is present.

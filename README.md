@@ -6,6 +6,10 @@ A small Go CLI for GoDaddy DNS automation. It is built for agent-driven use:
 mutations require explicit `--apply`, there is no broad delete-all command, and
 single-record delete refuses ambiguous matches.
 
+**Agents:** start with [`AGENTS.md`](AGENTS.md) — a concise, machine-oriented guide to
+install, auth, the dry-run/`--apply` safety model, the `--json` output shapes, and the
+exit-code contract.
+
 The CLI uses the GoDaddy Domains API from:
 
 https://developer.godaddy.com/swagger/swagger_domains.json
@@ -88,6 +92,32 @@ Environment variables can also be used without saving a session:
 
 ```sh
 GODADDY_API_KEY=... GODADDY_API_SECRET=... gogodaddy auth status
+```
+
+## Delegate Access
+
+A standard API key only reaches its own account. To manage someone else's GoDaddy
+account (or let someone manage yours), grant delegate access on the web first:
+
+https://account.godaddy.com/access
+
+`auth delegate` prints that page and shows the next step:
+
+```sh
+gogodaddy auth delegate
+```
+
+Once access is granted, target the delegated account by passing its shopper id,
+which the CLI sends as the `X-Shopper-Id` header:
+
+```sh
+gogodaddy --shopper-id OWNER_SHOPPER_ID records list --domain example.com
+```
+
+You can also bake the shopper id into a saved session:
+
+```sh
+gogodaddy auth login --shopper-id OWNER_SHOPPER_ID --api-key "$GODADDY_API_KEY" --api-secret "$GODADDY_API_SECRET"
 ```
 
 ## Add DNS Records
