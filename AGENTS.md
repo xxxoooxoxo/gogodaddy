@@ -23,6 +23,7 @@ Run from a checkout without installing:
 
 ```sh
 go run ./cmd/gogodaddy --help
+gogodaddy --version   # or -V; add --json for {"version":"..."}
 ```
 
 ## Authentication

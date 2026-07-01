@@ -22,12 +22,17 @@ import (
 // that account's shopper id via --shopper-id (the X-Shopper-Id header).
 const delegateAccessURL = "https://account.godaddy.com/access"
 
+// version is the CLI version, overridable at build time via
+// -ldflags "-X github.com/xxxoooxoxo/gogodaddy/internal/cli.version=x.y.z".
+var version = "0.1.0"
+
 type globalOptions struct {
 	configPath string
 	json       bool
 	baseURL    string
 	shopperID  string
 	timeout    time.Duration
+	version    bool
 }
 
 type optionalInt struct {
@@ -68,6 +73,9 @@ func Main(args []string, stdout, stderr io.Writer) int {
 		fmt.Fprintln(stderr, err)
 		return 2
 	}
+	if opts.version {
+		return writeOutput(stdout, opts.json, map[string]any{"version": version}, "gogodaddy "+version+"\n")
+	}
 	if len(rest) == 0 {
 		printUsage(stdout)
 		return 2
@@ -102,6 +110,8 @@ func parseGlobal(args []string, stderr io.Writer) (globalOptions, []string, erro
 	fs.StringVar(&opts.baseURL, "base-url", "", "override API base URL for this command")
 	fs.StringVar(&opts.shopperID, "shopper-id", "", "override X-Shopper-Id for reseller calls")
 	fs.DurationVar(&opts.timeout, "timeout", opts.timeout, "HTTP timeout")
+	fs.BoolVar(&opts.version, "version", false, "print version and exit")
+	fs.BoolVar(&opts.version, "V", false, "print version and exit")
 	fs.Usage = func() {
 		printUsage(stderr)
 	}
@@ -696,6 +706,7 @@ Global flags:
   --base-url URL      override API base URL for this command
   --shopper-id ID     set X-Shopper-Id for reseller calls
   --timeout DURATION  HTTP timeout, default 30s
+  --version, -V       print version and exit
 
 Commands:
   auth       Manage the saved GoDaddy API session and delegate access

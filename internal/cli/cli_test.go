@@ -123,6 +123,31 @@ func TestAuthDelegateJSONReportsConfiguredShopper(t *testing.T) {
 	}
 }
 
+func TestVersionFlag(t *testing.T) {
+	var stdout, stderr bytes.Buffer
+	if code := Main([]string{"--version"}, &stdout, &stderr); code != 0 {
+		t.Fatalf("code = %d, stderr = %q", code, stderr.String())
+	}
+	if !strings.Contains(stdout.String(), "gogodaddy ") {
+		t.Fatalf("stdout = %q, want version line", stdout.String())
+	}
+
+	stdout.Reset()
+	stderr.Reset()
+	if code := Main([]string{"--json", "-V"}, &stdout, &stderr); code != 0 {
+		t.Fatalf("json code = %d, stderr = %q", code, stderr.String())
+	}
+	var payload struct {
+		Version string `json:"version"`
+	}
+	if err := json.Unmarshal(stdout.Bytes(), &payload); err != nil {
+		t.Fatalf("decode: %v, stdout = %q", err, stdout.String())
+	}
+	if payload.Version == "" {
+		t.Fatalf("version empty, stdout = %q", stdout.String())
+	}
+}
+
 func TestRecordsListJSONEnvelope(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path != "/v1/domains/example.com/records/A/www" {
