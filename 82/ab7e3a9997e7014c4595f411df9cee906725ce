@@ -1,0 +1,26 @@
+AGENTS.md
+  s_a7974022502170::t_76bb6ba6e0ab32 26
+internal/cli/cli.go
+  s_a7974022502170::t_63d97c683678e2 76-78
+  s_a7974022502170::t_6cb473e4255c78 113-114
+  s_a7974022502170::t_ce76c8d5678d51 25-28,35
+  s_a7974022502170::t_297e17e05cde11 709
+internal/cli/cli_test.go
+  s_a7974022502170::t_e9cb14916db51f 126-150
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.8",
+  "base_commit_sha": "82ab7e3a9997e7014c4595f411df9cee906725ce",
+  "prompts": {},
+  "sessions": {
+    "s_a7974022502170": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "7ca9e3c9-0880-468e-a191-e18711464f2b",
+        "model": "claude-opus-4-8"
+      },
+      "human_author": "Ali Houssain Sareini <alihsareini@live.com>"
+    }
+  }
+}
